@@ -27,3 +27,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Ignore docs for now
+docs/

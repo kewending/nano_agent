@@ -1,13 +1,17 @@
 [project]
 name = "nano-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "A lightweight, zero-framework agent built from scratch to explore agentic architectures, ReAct loops, and tool calling."
 readme = "README.md"
 authors = [
     { name = "kewending", email = "kewending@outlook.com" }
 ]
+license = "MIT"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "openai==2.44.0",
+    "python-dotenv==1.1.0",
+]
 
 [project.scripts]
 nano-agent = "nano_agent:main"
