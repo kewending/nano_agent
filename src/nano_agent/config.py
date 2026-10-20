@@ -8,6 +8,21 @@ load_dotenv()
 
 MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS", "10"))
 
+# Operational tool limits and defaults
+COMMAND_TIMEOUT_SECONDS = int(os.getenv("COMMAND_TIMEOUT_SECONDS", "60"))
+MAX_COMMAND_OUTPUT_CHARS = int(os.getenv("MAX_COMMAND_OUTPUT_CHARS", "5000"))
+DEFAULT_FILE_READ_LIMIT = int(os.getenv("DEFAULT_FILE_READ_LIMIT", "200"))
+
+IGNORED_DIR_NAMES = frozenset({
+    ".git",
+    ".venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "node_modules",
+})
+
 @dataclass
 class ModelConfig:
     """Encapsulates connection details for an LLM provider."""
