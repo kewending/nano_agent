@@ -36,9 +36,8 @@ def main() -> None:
         if user_input.lower() in ("exit", "quit", "q"):
             print("\nGoodbye!")
             break
-
-        response = agent.run(user_input)
-        print(f"Assistant: {response}\n")
+  
+        agent.run(user_input)
 
     # Print total cumulative tokens consumed during the entire session
     print("-" * 50)

@@ -55,24 +55,24 @@ def function_to_schema(func: Callable):
             },
         }
 
-def execute_tool(name: str, arguments_json: str) -> str:
+def execute_tool(name: str, arguments_json: str) -> tuple[str, bool]:
     # Step A: Check if the Tool Exists
     func = TOOL_REGISTRY.get(name)
     if not func:
-        return f"Error: Tool '{name}' is not recognized."
+        return f"Error: Tool '{name}' is not recognized.", True
 
     # Step B: Parse the JSON Arguments Safely
     try:
         args = json.loads(arguments_json) if arguments_json else {}
     except json.JSONDecodeError:
-        return f"Error: Malformed JSON arguments: {arguments_json}"
+        return f"Error: Malformed JSON arguments: {arguments_json}", True
 
     # Step C: Call the Function with Keyword Unpacking
     try:
         result = func(**args)
-        return str(result)
+        return str(result), False
     except Exception as e:
-        return f"Error executing '{name}': {e}"
+        return f"Error executing '{name}': {e}", True
 
 
 @tool
