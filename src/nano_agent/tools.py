@@ -6,14 +6,26 @@ import json
 import subprocess
 import os
 from typing import Any, Callable
+from dataclasses import dataclass
 from nano_agent.config import (
     COMMAND_TIMEOUT_SECONDS,
     MAX_COMMAND_OUTPUT_CHARS,
     DEFAULT_FILE_READ_LIMIT,
     IGNORED_DIR_NAMES
 )
-TOOLS: list[dict[str, Any]] = []
-TOOL_REGISTRY: dict[str, Callable] = {}
+from nano_agent.permissions import RiskLevel
+
+
+@dataclass(frozen=True)
+class ToolMeta:
+    """Harness-side metadata for a tool. Never sent to the model."""
+
+    risk: RiskLevel
+
+
+TOOLS: list[dict[str, Any]] = []              # schemas sent to the model
+TOOL_REGISTRY: dict[str, Callable] = {}       # name -> function
+TOOL_METADATA: dict[str, ToolMeta] = {}       # name -> permission metadata
 
 PYTHON_TO_JSON_TYPES = {
     str: "string",
@@ -24,12 +36,41 @@ PYTHON_TO_JSON_TYPES = {
     dict: "object",
 }
 
-def tool(func: Callable) -> Callable:
-    """Decorator that automatically registers a function and creates its OpenAI schema."""
-    schema = function_to_schema(func)
-    TOOLS.append(schema)
-    TOOL_REGISTRY[func.__name__] = func
-    return func
+def tool(func: Callable | None = None, *, risk: RiskLevel = RiskLevel.DANGEROUS):
+    """Register a function as an agent tool and generate its OpenAI schema.
+
+    Use bare (`@tool`, risk defaults to DANGEROUS so a forgotten risk fails
+    closed) or with arguments (`@tool(risk=RiskLevel.SAFE)`).
+    """
+    if not isinstance(risk, RiskLevel):
+        raise TypeError(
+            f"risk must be a RiskLevel (e.g. RiskLevel.SAFE), "
+            f"got {type(risk).__name__}: {risk!r}"
+        )
+    if func is not None and not callable(func):
+        raise TypeError(
+            f"@tool got {func!r} as its first argument; "
+            f"pass the risk by keyword: @tool(risk=RiskLevel.SAFE)"
+        )
+
+    def register(f: Callable) -> Callable:
+        if f.__name__ in TOOL_REGISTRY:
+            raise ValueError(f"Tool {f.__name__!r} is already registered")
+        TOOLS.append(function_to_schema(f))
+        TOOL_REGISTRY[f.__name__] = f
+        TOOL_METADATA[f.__name__] = ToolMeta(risk=risk)
+        return f
+
+    if func is None:
+        return register     # @tool(...) form: Python calls register(f) next
+    return register(func)   # bare @tool form: register right now
+
+
+def get_tool_risk(name: str) -> RiskLevel:
+    """Return the risk level of a tool. Unknown names fail closed as DANGEROUS."""
+    meta = TOOL_METADATA.get(name)
+    return meta.risk if meta else RiskLevel.DANGEROUS
+
 
 def function_to_schema(func: Callable):
     """Generate Tool Schema JSON from a Python function signature and docstrings."""
@@ -87,7 +128,7 @@ def execute_tool(name: str, arguments_json: str) -> tuple[str, bool]:
 # Utility Tools
 # ---------------------------------------------------------------------------
 
-@tool
+@tool(risk=RiskLevel.SAFE)
 def get_current_time() -> str:
     """
     Returns the current local time along with the system timezone info.
@@ -95,7 +136,7 @@ def get_current_time() -> str:
     local_time = datetime.now().astimezone()
     return local_time.strftime("%Y-%m-%d %H:%M:%S %Z (%z)")
 
-@tool
+@tool(risk=RiskLevel.SAFE)
 def calculate(expression: str) -> str:
     """
     Evaluates a mathematical expression string safely and returns the result as a string.
@@ -154,7 +195,7 @@ def calculate(expression: str) -> str:
 # Coding Agent Tools 
 # ---------------------------------------------------------------------------
 
-@tool
+@tool(risk=RiskLevel.SAFE)
 def read_file(filepath: str, offset: int = 1, limit: int = DEFAULT_FILE_READ_LIMIT) -> str:
     """
     Reads content from a file with line numbers.
@@ -179,7 +220,7 @@ def read_file(filepath: str, offset: int = 1, limit: int = DEFAULT_FILE_READ_LIM
     return "".join(lines) if lines else "<empty file>"
 
 
-@tool
+@tool(risk=RiskLevel.MUTATING)
 def write_file(filepath: str, content: str) -> str:
     """
     Creates a new file or overwrites an existing file with the provided content.
@@ -195,7 +236,7 @@ def write_file(filepath: str, content: str) -> str:
     return f"Successfully wrote {len(content)} characters to '{filepath}'."
 
 
-@tool
+@tool(risk=RiskLevel.MUTATING)
 def edit_file(filepath: str, target_content: str, replacement_content: str) -> str:
     """
     Replaces a specific block of text ('target_content') with 'replacement_content' in an existing file.
@@ -229,7 +270,7 @@ def edit_file(filepath: str, target_content: str, replacement_content: str) -> s
     return f"Successfully updated '{filepath}'."
 
 
-@tool
+@tool(risk=RiskLevel.SAFE)
 def list_directory(path: str = ".") -> str:
     """
     Lists files and subdirectories in a given directory path.
@@ -272,7 +313,7 @@ def list_directory(path: str = ".") -> str:
     return "\n".join(entries)
 
 
-@tool
+@tool(risk=RiskLevel.DANGEROUS)
 def execute_command(command: str) -> str:
     """
     Runs a shell command on the operating system and captures its exit code, stdout, and stderr.
