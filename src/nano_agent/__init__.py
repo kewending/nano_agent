@@ -30,6 +30,11 @@ def main() -> None:
             print("\nSession interrupted. Exiting...")
             break
 
+        if user_input.lower() in ("/context", "/tokens"):
+            breakdown = agent.get_context_breakdown()
+            print(breakdown)
+            continue
+
         if not user_input:
             continue
 

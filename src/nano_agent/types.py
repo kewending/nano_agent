@@ -64,3 +64,50 @@ class UsageMetadata:
             f"{self.completion_tokens} out{think_str} | "
             f"{self.total_tokens} total"
         )
+
+@dataclass
+class ContextBreakdown:
+    system_prompt_tokens: int
+    tools_schema_tokens: int
+    user_tokens: int
+    assistant_tokens: int
+    tool_calls_tokens: int
+    tool_results_tokens: int
+    total_tokens: int
+    context_limit: int
+    @property
+    def conversation_tokens(self) -> int:
+        return self.user_tokens + self.assistant_tokens
+    @property
+    def tool_use_tokens(self) -> int:
+        return self.tool_calls_tokens + self.tool_results_tokens
+    @property
+    def usage_percentage(self) -> float:
+        return (self.total_tokens / self.context_limit * 100) if self.context_limit > 0 else 0.0
+    
+    def __str__(self) -> str:
+        """Formatted display string for user or terminal output."""
+        def pct(val: int) -> str:
+            return f"{(val / self.total_tokens * 100):5.1f}%" if self.total_tokens > 0 else "  0.0%"
+        # Progress bar (20 chars)
+        bar_width = 24
+        filled = int(min(1.0, self.total_tokens / max(1, self.context_limit)) * bar_width)
+        bar = "█" * filled + "░" * (bar_width - filled)
+        lines = [
+            "┌─ Context Usage Breakdown ────────────────────────────────────┐",
+            f"│ Context Window: {self.total_tokens:,} / {self.context_limit:,} tokens ({self.usage_percentage:.1f}%)",
+            f"│ [{bar}]",
+            "├─────────────────────────────┬──────────────┬─────────────────┤",
+            "│ Component                   │ Tokens       │ Share           │",
+            "├─────────────────────────────┼──────────────┼─────────────────┤",
+            f"│ ⚙️  System Prompt            │ {self.system_prompt_tokens:>10,}   │ {pct(self.system_prompt_tokens):>13}   │",
+            f"│ 🛠️  Tool Registry (Schemas)  │ {self.tools_schema_tokens:>10,}   │ {pct(self.tools_schema_tokens):>13}   │",
+            f"│ 💬 Conversation             │ {self.conversation_tokens:>10,}   │ {pct(self.conversation_tokens):>13}   │",
+            f"│    ├─ User messages         │ {self.user_tokens:>10,}   │ {pct(self.user_tokens):>13}   │",
+            f"│    └─ Assistant text        │ {self.assistant_tokens:>10,}   │ {pct(self.assistant_tokens):>13}   │",
+            f"│ 🔧 Tool Invocations         │ {self.tool_use_tokens:>10,}   │ {pct(self.tool_use_tokens):>13}   │",
+            f"│    ├─ Tool calls            │ {self.tool_calls_tokens:>10,}   │ {pct(self.tool_calls_tokens):>13}   │",
+            f"│    └─ Tool outputs (results)│ {self.tool_results_tokens:>10,}   │ {pct(self.tool_results_tokens):>13}   │",
+            "└─────────────────────────────┴──────────────┴─────────────────┘",
+        ]
+        return "\n".join(lines)

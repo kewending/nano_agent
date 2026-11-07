@@ -30,6 +30,7 @@ class ModelConfig:
     api_key: str
     base_url: str | None
     model: str
+    context_windows: int
 
 
 def get_model_config(provider: str = "llama") -> ModelConfig:
@@ -43,23 +44,25 @@ def get_model_config(provider: str = "llama") -> ModelConfig:
         api_key = os.getenv("LLAMA_API_KEY")
         base_url = os.getenv("LLAMA_BASE_URL")
         model = os.getenv("LLAMA_MODEL")
+        context_windows = os.getenv("LLAMA_CONTEXT_WINDOWS")
         if not base_url:
             raise ValueError("LLAMA_BASE_URL is missing in .env")
         if not model:
             raise ValueError("LLAMA_MODEL is missing in .env")
-        return ModelConfig(api_key=api_key, base_url=base_url, model=model)
+        return ModelConfig(api_key=api_key, base_url=base_url, model=model, context_windows=context_windows)
 
     elif provider == "gemini":
         api_key = os.getenv("GEMINI_API_KEY")
         base_url = os.getenv("GEMINI_BASE_URL")
         model = os.getenv("GEMINI_MODEL")
+        context_windows = os.getenv("GEMINI_CONTEXT_WINDOWS")
         if not api_key:
             raise ValueError("GEMINI_API_KEY is missing in .env")
         if not base_url:
             raise ValueError("GEMINI_BASE_URL is missing in .env")
         if not model:
             raise ValueError("GEMINI_MODEL is missing in .env")
-        return ModelConfig(api_key=api_key, base_url=base_url, model=model)
+        return ModelConfig(api_key=api_key, base_url=base_url, model=model, context_windows=context_windows)
 
     else:
         raise ValueError(

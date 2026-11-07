@@ -20,7 +20,8 @@ from nano_agent.events import (
 from nano_agent.memory import ConversationMemory
 from nano_agent.prompts import load_system_prompt
 from nano_agent.tools import TOOLS, execute_tool
-from nano_agent.types import UsageMetadata
+from nano_agent.types import UsageMetadata, ContextBreakdown
+from nano_agent.tokens import count_tokens, count_payload_tokens
 
 
 class Agent:
@@ -196,6 +197,51 @@ class Agent:
                 tool_call_id=call_id,
                 content=tool_result,
             )
+    def get_context_breakdown(self) -> ContextBreakdown:
+        """Inspects current memory and tool registry to calculate context consumption."""
+        system_tokens = 0
+        user_tokens = 0
+        assistant_tokens = 0
+        tool_calls_tokens = 0
+        tool_results_tokens = 0
+        # 1. Inspect conversation history
+        for msg in self.memory.get_messages():
+            role = msg.get("role")
+            content = msg.get("content") or ""
+            if role == "system":
+                system_tokens += count_tokens(content)
+            elif role == "user":
+                user_tokens += count_tokens(content)
+            elif role == "assistant":
+                if content:
+                    assistant_tokens += count_tokens(content)
+                if "tool_calls" in msg and msg["tool_calls"]:
+                    tool_calls_tokens += count_payload_tokens(msg["tool_calls"])
+            elif role == "tool":
+                tool_results_tokens += count_tokens(content)
+        # 2. Tool Registry (the JSON definitions passed to tools=[...])
+        tools_schema_tokens = count_payload_tokens(TOOLS)
+        # 3. Context window limit from active config
+        active_config = self.local_config if (self.local and self.local_config) else self.cloud_config
+        context_limit = int(getattr(active_config, "context_windows"))
+        total_tokens = (
+            system_tokens
+            + tools_schema_tokens
+            + user_tokens
+            + assistant_tokens
+            + tool_calls_tokens
+            + tool_results_tokens
+        )
+        return ContextBreakdown(
+            system_prompt_tokens=system_tokens,
+            tools_schema_tokens=tools_schema_tokens,
+            user_tokens=user_tokens,
+            assistant_tokens=assistant_tokens,
+            tool_calls_tokens=tool_calls_tokens,
+            tool_results_tokens=tool_results_tokens,
+            total_tokens=total_tokens,
+            context_limit=context_limit,
+        )
 
     def run_stream(self, user_prompt: str) -> Generator[AgentEvent, None, str]:
         """
