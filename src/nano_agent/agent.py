@@ -1,5 +1,5 @@
 import json
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from typing import Any
 from openai import APIConnectionError, APIError
 
@@ -8,20 +8,45 @@ from nano_agent.events import (
     AgentEndEvent,
     AgentEvent,
     AgentStartEvent,
+    ApprovalRequestEvent,
     ErrorEvent,
     ModelFallbackEvent,
     ThinkingDeltaEvent,
     TokenDeltaEvent,
     ToolCallResultEvent,
+    ToolCallDeniedEvent,
     ToolCallStartEvent,
     TurnEndEvent,
     TurnStartEvent,
 )
 from nano_agent.memory import ConversationMemory
+from nano_agent.permissions import (
+    ApprovalAnswer,
+    PermissionDecision,
+    PermissionMode,
+    PermissionPolicy,
+    PermissionRequest,
+    Verdict,
+)
 from nano_agent.prompts import load_system_prompt
-from nano_agent.tools import TOOLS, execute_tool
+from nano_agent.tools import TOOLS, execute_tool, get_tool_risk
 from nano_agent.types import UsageMetadata, ContextBreakdown
 from nano_agent.tokens import count_tokens, count_payload_tokens
+
+
+DENIAL_PREFIX = "Permission denied:"
+
+# A frontend function that answers one approval request (CLI prompt, web UI, test fake).
+# Returning None means "no answer", which denies the call.
+Approver = Callable[[ApprovalRequestEvent], ApprovalAnswer | None]
+
+
+def format_denial(reason: str) -> str:
+    """The tool message the model reads when a call is blocked.
+
+    Says why, and tells the model not to retry the same call, so it adapts instead of looping.
+    """
+    return f"{DENIAL_PREFIX} {reason}. Do not retry this call; try a different approach or ask the user."
 
 
 class Agent:
@@ -37,6 +62,7 @@ class Agent:
         local_config: ModelConfig | None = None,
         verbose: bool = True,
         local: bool = False,
+        permission_mode: PermissionMode = PermissionMode.DEFAULT,
     ) -> None:
         self.cloud_config = cloud_config
         self.cloud_client = create_client(cloud_config)
@@ -51,6 +77,7 @@ class Agent:
         self.max_steps = MAX_ITERATIONS
         self.verbose = verbose
         self._is_thinking = False
+        self.policy = PermissionPolicy(mode=permission_mode)
 
     def get_model(self) -> str:
         """Returns the name of the currently active primary model."""
@@ -160,11 +187,57 @@ class Agent:
 
         return accumulated_content, reconstructed_tool_calls, step_usage
 
+    def _check_permission(
+        self, call_id: str, tool_name: str, arguments: dict[str, Any]
+    ) -> Generator[AgentEvent, None, PermissionDecision]:
+        """
+        Asks the policy whether one tool call may run.
+        - ALLOW / DENY: returned straight away, nothing is yielded.
+        - ASK: yields an ApprovalRequestEvent, then reads the answer the frontend
+          wrote into it. Anything other than YES or ALWAYS (including no answer) denies.
+        Always returns ALLOW or DENY, never ASK.
+        """
+        risk = get_tool_risk(tool_name)
+        request = PermissionRequest(tool_name=tool_name, risk=risk, arguments=arguments)
+        decision = self.policy.evaluate(request)
+
+        if decision.verdict is not Verdict.ASK:
+            return decision
+
+        event = ApprovalRequestEvent(
+            call_id=call_id,
+            tool_name=tool_name,
+            risk=risk,
+            reason=decision.reason,
+            arguments=arguments,
+        )
+        yield event  # pauses here; the frontend sets event.answer before we resume
+
+        match event.answer:
+            case ApprovalAnswer.ALWAYS:
+                self.policy.grant(request)
+                return PermissionDecision(
+                    verdict=Verdict.ALLOW,
+                    reason=f"{tool_name} approved by you for this session",
+                )
+            case ApprovalAnswer.YES:
+                return PermissionDecision(
+                    verdict=Verdict.ALLOW,
+                    reason=f"{tool_name} approved by you",
+                )
+            case _:
+                return PermissionDecision(
+                    verdict=Verdict.DENY,
+                    reason=f"{tool_name} denied by you",
+                )
+
     def _execute_tool_calls(
         self, tool_calls: list[dict[str, Any]]
     ) -> Generator[AgentEvent, None, None]:
         """
         Executes a list of tool calls:
+        - Checks each call against self.policy first (may yield ApprovalRequestEvent).
+        - Denied calls yield ToolCallDeniedEvent and are not run.
         - Yields ToolCallStartEvent and ToolCallResultEvent.
         - Adds tool outputs to conversation memory.
         """
@@ -178,11 +251,29 @@ class Agent:
             except json.JSONDecodeError:
                 parsed_args = {"raw": args_json}
 
+            if not isinstance(parsed_args, dict):  # e.g. the model sent "5" or "[1, 2]"
+                parsed_args = {"raw": args_json}
+
             yield ToolCallStartEvent(
                 call_id=call_id,
                 tool_name=tool_name,
                 arguments=parsed_args,
             )
+
+            decision = yield from self._check_permission(call_id, tool_name, parsed_args)
+
+            if decision.verdict is Verdict.DENY:
+                yield ToolCallDeniedEvent(
+                    call_id=call_id,
+                    tool_name=tool_name,
+                    reason=decision.reason,
+                )
+                # Every tool_call_id must get a tool message, or the next API call fails with 400.
+                self.memory.add_tool_message(
+                    tool_call_id=call_id,
+                    content=format_denial(decision.reason),
+                )
+                continue
 
             tool_result, is_error = execute_tool(tool_name, args_json)
 
@@ -340,6 +431,9 @@ class Agent:
                 print("\n🔧 Model requested tool execution:")
                 print(f"   ▶ {name}({json.dumps(args)})")
 
+            case ToolCallDeniedEvent(reason=reason):
+                print(f"   🚫 Denied: {reason}")
+
             case ToolCallResultEvent(output=out, is_error=err):
                 status = "❌" if err else "✔"
                 print(f"   {status} Output: {out}")
@@ -359,16 +453,23 @@ class Agent:
             case _:
                 pass
 
-    def run(self, user_prompt: str) -> str:
+    def run(self, user_prompt: str, approver: Approver | None = None) -> str:
         """
         Synchronous execution wrapper that runs the event stream.
         Maintains backward compatibility while completely decoupling
         the ReAct loop logic from console output.
+
+        `approver` answers ApprovalRequestEvents. Without one, every request
+        stays unanswered and is denied (fail closed).
         """
         final_reply = ""
         for event in self.run_stream(user_prompt):
             if self.verbose:
                 self._render_event(event)
+            # Write the answer into the event's decision slot before the generator resumes.
+            if isinstance(event, ApprovalRequestEvent) and approver is not None:
+                event.answer = approver(event)
+
             if isinstance(event, AgentEndEvent):
                 final_reply = event.reply_text
         return final_reply

@@ -85,6 +85,14 @@ class PermissionMode(StrEnum):
     AUTO_APPROVE = "auto_approve"
 
 
+class ApprovalAnswer(StrEnum):
+    """The user's answer when asked to approve one tool call."""
+
+    YES = "yes"         # run it this time
+    NO = "no"           # don't run it
+    ALWAYS = "always"   # run it, and stop asking for this tool this session
+
+
 @dataclass(frozen=True)
 class PermissionDecision:
     """The policy's answer for one tool call: a verdict and why."""

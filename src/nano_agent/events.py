@@ -1,6 +1,7 @@
 import time
 from dataclasses import asdict, dataclass, field, KW_ONLY
 from typing import Any, Union
+from nano_agent.permissions import ApprovalAnswer, RiskLevel
 from nano_agent.types import UsageMetadata
 
 
@@ -111,6 +112,29 @@ class ToolCallStartEvent(AgentEvent):
 
 
 @dataclass
+class ApprovalRequestEvent(AgentEvent):
+    """Emitted when a tool call needs the user's approval before it runs."""
+
+    call_id: str
+    tool_name: str
+    risk: RiskLevel
+    reason: str
+    answer: ApprovalAnswer | None = None
+    arguments: dict[str, Any] = field(default_factory=dict)
+    event_type: str = field(init=False, default="approval_request")
+
+
+@dataclass
+class ToolCallDeniedEvent(AgentEvent):
+    """Emitted when a tool call is blocked and will not run."""
+
+    call_id: str
+    tool_name: str
+    reason: str
+    event_type: str = field(init=False, default="tool_call_denied")
+
+
+@dataclass
 class ToolOutputDeltaEvent(AgentEvent):
     """Emitted during streaming tool execution (e.g., live stdout chunks from long-running shell commands)."""
 
@@ -153,6 +177,8 @@ AnyAgentEvent = Union[
     ThinkingDeltaEvent,
     TokenDeltaEvent,
     ToolCallStartEvent,
+    ApprovalRequestEvent,
+    ToolCallDeniedEvent,
     ToolOutputDeltaEvent,
     ToolCallResultEvent,
     ErrorEvent,
@@ -168,6 +194,8 @@ __all__ = [
     "ThinkingDeltaEvent",
     "TokenDeltaEvent",
     "ToolCallStartEvent",
+    "ApprovalRequestEvent",
+    "ToolCallDeniedEvent",
     "ToolOutputDeltaEvent",
     "ToolCallResultEvent",
     "ErrorEvent",

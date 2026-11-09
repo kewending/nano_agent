@@ -1,5 +1,6 @@
 import sys
 from nano_agent.agent import Agent
+from nano_agent.approval import ask_user
 from nano_agent.config import get_model_config
 
 # Ensure Windows terminal prints emojis and special characters cleanly
@@ -42,7 +43,7 @@ def main() -> None:
             print("\nGoodbye!")
             break
   
-        agent.run(user_input)
+        agent.run(user_input, approver=ask_user)
 
     # Print total cumulative tokens consumed during the entire session
     print("-" * 50)
