@@ -396,3 +396,48 @@ def test_shell_with_non_string_command_does_not_crash():
     decision = PermissionPolicy().evaluate(shell_request(123))
 
     assert decision.verdict == Verdict.ASK
+
+# ---------------------------------------------------------------------------
+# Decision order
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("mode", "granted", "tool_request", "expected_verdict", "reason_word"),
+    [
+        (PermissionMode.DEFAULT, False, shell_request("ls"), Verdict.ASK, "approval"),
+        (PermissionMode.DEFAULT, True, shell_request("ls"), Verdict.ALLOW, "approved earlier"),
+        (PermissionMode.AUTO_APPROVE, False, shell_request("ls"), Verdict.ALLOW, "auto-approved"),
+        (PermissionMode.AUTO_APPROVE, True, shell_request("ls"), Verdict.ALLOW, "approved earlier"),
+        (PermissionMode.READ_ONLY, True, shell_request("ls"), Verdict.DENY, "read-only"),
+        (PermissionMode.READ_ONLY, False, shell_request("rm -rf /"), Verdict.DENY, "hard security"),
+        (PermissionMode.AUTO_APPROVE, True, shell_request("rm -rf /"), Verdict.DENY, "hard security"),
+        (PermissionMode.DEFAULT, True, make_request(RiskLevel.SAFE, tool_name="read_file"), Verdict.ALLOW, "read-only"),
+        (PermissionMode.AUTO_APPROVE, True, make_request("weird", tool_name="mystery_tool"), Verdict.DENY, "unknown risk"),
+    ],
+    ids=[
+        "plain-ask",
+        "grant-allows",
+        "auto-allows",
+        "grant-before-auto",
+        "read-only-beats-grant",
+        "hard-deny-beats-read-only",
+        "hard-deny-beats-everything",
+        "grant-leaves-safe-alone",
+        "unknown-risk-denied",
+    ],
+)
+def test_decision_order(
+    mode: PermissionMode,
+    granted: bool,
+    tool_request: PermissionRequest,
+    expected_verdict: Verdict,
+    reason_word: str,
+):
+    policy = PermissionPolicy(mode=mode)
+    if granted:
+        policy.grant(tool_request)
+
+    decision = policy.evaluate(tool_request)
+
+    assert decision.verdict == expected_verdict
+    assert reason_word in decision.reason

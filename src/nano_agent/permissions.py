@@ -117,7 +117,14 @@ class PermissionPolicy:
     def evaluate(self, request: PermissionRequest) -> PermissionDecision:
         """Return the decision for one tool call.
 
-        Hard deny rules are checked first; no mode or grant can override them.
+        Rules run in this order; the first one that applies wins:
+          0. a hard deny rule matches       -> DENY (nothing can override it)
+          1. base decision from risk level  -> ALLOW / ASK / DENY (unknown risk)
+          2. read-only mode and not SAFE    -> DENY
+          3. granted earlier and ASK        -> ALLOW
+          4. auto-approve mode and ASK      -> ALLOW
+          5. otherwise                      -> the base decision
+
         Read-only: never changes the policy's state, so asking twice always
         gives the same answer.
         """
